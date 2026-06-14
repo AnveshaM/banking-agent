@@ -4,11 +4,15 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# ── HuggingFace config ───────────────────────────────────────────────────────
+# Get a free token at https://huggingface.co/settings/tokens
+HF_TOKEN = os.getenv("HF_TOKEN", "")
+
 # ── Model selection ──────────────────────────────────────────────────────────
-# Swap ORCHESTRATOR_MODEL to a frontier model (e.g. gemini-2.0-pro) for
-# more reliable routing. WORKER_MODEL can be a smaller/cheaper model.
-ORCHESTRATOR_MODEL = os.getenv("ORCHESTRATOR_MODEL", "gemini-2.0-flash")
-WORKER_MODEL       = os.getenv("WORKER_MODEL",       "gemini-2.0-flash")
+# Free HuggingFace Inference API models. Qwen2.5-72B is the most capable free option.
+# Alternatives: "mistralai/Mistral-7B-Instruct-v0.3", "HuggingFaceH4/zephyr-7b-beta"
+ORCHESTRATOR_MODEL = os.getenv("ORCHESTRATOR_MODEL", "Qwen/Qwen2.5-72B-Instruct")
+WORKER_MODEL       = os.getenv("WORKER_MODEL",       "Qwen/Qwen2.5-72B-Instruct")
 
 # ── App identity ─────────────────────────────────────────────────────────────
 APP_NAME = "bank_support"

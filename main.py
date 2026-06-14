@@ -5,33 +5,24 @@ Runs the full 5-layer production agent in your terminal:
 
   python main.py
 
-After each turn, the runner checks for pending refund proposals.
-If found, you're prompted to approve or reject — this is the HITL layer.
-Approved proposals execute the refund. Rejected proposals notify the agent.
-
-Structured JSON logs stream to stdout alongside the conversation.
-A cost summary prints at session end.
+After each turn, checks for pending refund proposals (HITL layer).
+Structured JSON logs stream alongside the conversation.
 """
 import sys
 import uuid
 import logging
-
-from google.adk.runners import Runner
-from google.adk.sessions import InMemorySessionService
-from google.genai import types
 
 from agent import root_agent
 from config import APP_NAME
 from observability.telemetry import cost_tracker, log_turn_end, log_turn_start
 from tools.bank_tools import execute_approved_refund
 from tools.idempotency import get_proposal_queue
+from tools.state_tools import set_session_state
 
 # ── Logging setup ─────────────────────────────────────────────────────────────
-# Structured logs go to stderr so they don't pollute the conversation output.
-# In production, ship these to your log aggregator.
 log = logging.getLogger("bank_support.main")
 logging.getLogger("bank_support.telemetry").setLevel(logging.INFO)
-for noisy in ["google", "httpx", "urllib3"]:
+for noisy in ["httpx", "urllib3", "huggingface_hub"]:
     logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
@@ -68,12 +59,6 @@ def _print_header():
 
 
 def _handle_pending_proposals() -> None:
-    """
-    HITL approval loop. Runs after every agent turn.
-
-    In production this is a dashboard or a Slack message to a human reviewer.
-    Here it's a simple CLI prompt.
-    """
     queue = get_proposal_queue()
     pending = queue.pending()
     if not pending:
@@ -107,27 +92,15 @@ def _handle_pending_proposals() -> None:
 def run_session():
     _print_header()
 
-    session_service = InMemorySessionService()
     session_id = str(uuid.uuid4())[:8]
     user_id = "user_demo"
 
-    session = session_service.create_session(
-        app_name=APP_NAME,
-        user_id=user_id,
-        session_id=session_id,
-        state={"session_id": session_id},   # Layer 3: pin session_id in state
-    )
-
-    runner = Runner(
-        agent=root_agent,
-        app_name=APP_NAME,
-        session_service=session_service,
-    )
+    # Layer 3: initialise session state dict shared across all tools
+    set_session_state({"session_id": session_id, "user_id": user_id})
 
     print(f"  {DIM}Session: {session_id} · type 'quit' to end{RESET}\n")
 
     while True:
-        # ── Get user input ────────────────────────────────────────────────────
         try:
             user_input = input(f"{BOLD}{WHITE}You: {RESET}").strip()
         except (KeyboardInterrupt, EOFError):
@@ -138,51 +111,24 @@ def run_session():
         if not user_input:
             continue
 
-        # ── Layer 5: log turn start ───────────────────────────────────────────
         turn_start = log_turn_start(session_id, user_input)
 
-        # ── Run the agent ─────────────────────────────────────────────────────
-        content = types.Content(
-            role="user",
-            parts=[types.Part(text=user_input)],
-        )
-
-        final_response = ""
-        responding_agent = "unknown"
-
         try:
-            events = runner.run(
-                user_id=user_id,
-                session_id=session.id,
-                new_message=content,
-            )
-            for event in events:
-                if event.is_final_response():
-                    final_response = event.content.parts[0].text
-                    # ADK surfaces the active agent name on the event
-                    responding_agent = getattr(event, "author", "unknown")
-                    break
-
+            final_response, responding_agent = root_agent.run(user_input)
         except Exception as exc:
             log.exception("Agent run failed")
             print(f"\n  {RED}Agent error: {exc}{RESET}\n")
             continue
 
-        # ── Print the response ────────────────────────────────────────────────
         print(f"\n{BOLD}{CYAN}Agent ({responding_agent}): {RESET}{final_response}\n")
 
-        # ── Layer 5: log turn end + cost ──────────────────────────────────────
         log_turn_end(session_id, final_response, turn_start, responding_agent)
-        # Approximate token counts (ADK doesn't expose token counts directly yet)
-        # In production, read from the event's usage metadata
         approx_input  = len(user_input.split()) * 2
         approx_output = len(final_response.split()) * 2
         cost_tracker.record_turn(session_id, approx_input, approx_output)
 
-        # ── Layer 4: HITL approval check ─────────────────────────────────────
         _handle_pending_proposals()
 
-    # ── Session summary ───────────────────────────────────────────────────────
     summary = cost_tracker.session_summary(session_id)
     print(f"""
 {DIM}  ─── Session Summary ────────────────────────────────────────────────

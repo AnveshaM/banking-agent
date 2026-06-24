@@ -1,0 +1,7 @@
+# Voice layer additions — install on top of the existing repo requirements
+# pip install -r voice/requirements.txt
+
+livekit-agents[deepgram,elevenlabs,silero]>=1.6.0
+livekit-plugins-deepgram>=1.6.0
+livekit-plugins-elevenlabs>=1.6.0
+livekit-plugins-silero>=1.6.0
